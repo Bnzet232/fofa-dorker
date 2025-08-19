@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Google Dorking Tool
+# Google Dorking Tool FIXED
 # Created by: bnzet
 
 import requests
@@ -10,254 +10,180 @@ import random
 import json
 import os
 import re
-from urllib.parse import urlparse, quote_plus
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote_plus, urlparse
 
 # ===== CONFIG =====
-MAX_RESULTS = 50  # Reduced to avoid blocking
-DELAY = 3  # Increased delay to avoid blocking
-TIMEOUT = 15
+MAX_RESULTS = 30  # Reduce untuk avoid blocking
+DELAY = 3  # Increase delay
+TIMEOUT = 20
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1'
 ]
-RESULTS_FILE = "google_dork_results.txt"
-GOOGLE_SEARCH_URL = "https://www.google.com/search"
 
-# ===== ASCII ART =====
-def show_banner():
-    print("""
-\033[1;36m
- ██████╗  ██████╗  ██████╗ ██╗     ███████╗    ██████╗  ██████╗ ██████╗ ██╗  ██╗
-██╔════╝ ██╔═══██╗██╔═══██╗██║     ██╔════╝    ██╔══██╗██╔═══██╗██╔══██╗██║ ██╔╝
-██║  ███╗██║   ██║██║   ██║██║     █████╗      ██║  ██║██║   ██║██████╔╝█████╔╝ 
-██║   ██║██║   ██║██║   ██║██║     ██╔══╝      ██║  ██║██║   ██║██╔══██╗██╔═██╗ 
-╚██████╔╝╚██████╔╝╚██████╔╝███████╗███████╗    ██████╔╝╚██████╔╝██║  ██║██║  ██╗
- ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝╚══════╝    ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-\033[0m
-\033[1;32mGoogle Dorking Tool | Created by: bnzet\033[0m
-\033[1;33mGithub: https://github.com/bnzet/google-dorker\033[0m
-\033[1;31m[!] For authorized security research only\033[0m
-\033[1;31m[!] Use responsibly and respect robots.txt\033[0m
-""")
-
-# ===== GOOGLE DORKING CLASS =====
 class GoogleDorker:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-        self.results = []
+        self.session.headers.update({
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
 
-    def get_random_user_agent(self):
-        return random.choice(USER_AGENTS)
-
-    def google_search(self, dork, num_results=MAX_RESULTS, start=0):
-        """Perform Google search manually by scraping results"""
+    def manual_google_search(self, dork, num_results=MAX_RESULTS):
+        """Manual Google search dengan parsing HTML"""
+        results = []
         try:
-            print(f"\033[1;33m[+] Searching for: {dork}\033[0m")
+            # Encode dork untuk URL
+            encoded_dork = quote_plus(dork)
+            url = f"https://www.google.com/search?q={encoded_dork}&num={num_results}"
             
-            params = {
-                'q': dork,
-                'num': min(100, num_results),
-                'start': start,
-                'hl': 'en',
-                'filter': '0'
-            }
+            print(f"\033[1;33m[+] Searching: {dork}\033[0m")
+            print(f"\033[1;33m[+] URL: {url}\033[0m")
             
-            headers = {
-                'User-Agent': self.get_random_user_agent(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-            }
+            response = self.session.get(url, timeout=TIMEOUT)
+            response.raise_for_status()
             
-            response = self.session.get(
-                GOOGLE_SEARCH_URL,
-                params=params,
-                headers=headers,
-                timeout=TIMEOUT
-            )
+            # Parse HTML untuk hasil
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            if response.status_code != 200:
-                print(f"\033[1;31m[!] Google returned status code: {response.status_code}\033[0m")
-                return []
+            # Cari semua link hasil
+            for g in soup.find_all('div', class_='g'):
+                link = g.find('a')
+                if link and link.get('href'):
+                    href = link.get('href')
+                    if href.startswith('/url?q='):
+                        # Extract actual URL
+                        actual_url = href.split('/url?q=')[1].split('&')[0]
+                        actual_url = requests.utils.unquote(actual_url)
+                        
+                        # Skip Google URLs
+                        if 'google.com' not in actual_url:
+                            results.append(actual_url)
+                            print(f"\033[1;32m[+] Found: {actual_url}\033[0m")
             
-            return self.parse_google_results(response.text)
+            return results
             
         except Exception as e:
             print(f"\033[1;31m[!] Search error: {str(e)}\033[0m")
-            return []
+            return results
 
-    def parse_google_results(self, html_content):
-        """Parse Google search results from HTML"""
-        soup = BeautifulSoup(html_content, 'html.parser')
-        results = []
-        
-        # Find search result links
-        for g in soup.find_all('div', class_='g'):
-            link = g.find('a')
-            if link and link.get('href'):
-                url = link.get('href')
-                if url.startswith('/url?q='):
-                    url = url.split('/url?q=')[1].split('&')[0]
-                    url = requests.utils.unquote(url)
-                
-                # Filter out Google URLs and validate
-                if (url.startswith('http') and 
-                    not urlparse(url).netloc.endswith('google.com')):
-                    results.append(url)
-        
-        return results
-
-    def process_dork(self, dork, max_results=MAX_RESULTS, output_file=RESULTS_FILE):
-        """Process a single dork query"""
-        print(f"\n\033[1;36m[+] Processing dork: {dork}\033[0m")
-        
+    def alternative_search_method(self, dork):
+        """Alternative method menggunakan different approach"""
         try:
-            all_results = []
-            results_per_page = 10
-            pages_needed = (max_results + results_per_page - 1) // results_per_page
+            # Gunakan different Google domain
+            domains = [
+                "https://www.google.com",
+                "https://www.google.co.id", 
+                "https://www.google.com.hk"
+            ]
             
-            for page in range(pages_needed):
-                start = page * results_per_page
-                results = self.google_search(dork, results_per_page, start)
-                
-                if not results:
-                    print("\033[1;33m[!] No results found or blocked by Google\033[0m")
-                    break
-                
-                for result in results:
-                    if len(all_results) >= max_results:
-                        break
-                    all_results.append(result)
-                
-                print(f"\033[1;32m[+] Found {len(results)} results on page {page + 1}\033[0m")
-                
-                # Add delay to avoid blocking
-                time.sleep(random.uniform(DELAY, DELAY + 2))
-                
-                if len(all_results) >= max_results:
-                    break
-            
-            if all_results:
-                formatted_results = []
-                for i, url in enumerate(all_results, 1):
-                    formatted_result = self.format_result(url, dork, i)
-                    formatted_results.append(formatted_result)
-                    self.print_result_info(formatted_result)
-                
-                self.save_results(formatted_results, output_file)
-                print(f"\033[1;32m[+] Saved {len(formatted_results)} results to {output_file}\033[0m")
-            else:
-                print("\033[1;33m[!] No results found for this dork\033[0m")
-                
+            for domain in domains:
+                try:
+                    encoded_dork = quote_plus(dork)
+                    url = f"{domain}/search?q={encoded_dork}&num=10"
+                    
+                    headers = {
+                        'User-Agent': random.choice(USER_AGENTS),
+                        'Referer': domain
+                    }
+                    
+                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
+                    
+                    # Simple regex untuk find URLs
+                    pattern = r'https?://[^\s"<>]+'
+                    urls = re.findall(pattern, response.text)
+                    
+                    # Filter hanya external URLs
+                    filtered_urls = []
+                    for url in urls:
+                        if 'google.com' not in url and '/search?' not in url:
+                            if url not in filtered_urls:
+                                filtered_urls.append(url)
+                                print(f"\033[1;34m[+] Alternative found: {url}\033[0m")
+                    
+                    if filtered_urls:
+                        return filtered_urls[:10]  # Limit results
+                        
+                except:
+                    continue
+                    
         except Exception as e:
-            print(f"\033[1;31m[!] Error processing dork: {str(e)}\033[0m")
-
-    def format_result(self, url, dork, index):
-        """Format the search result with additional information"""
-        parsed_url = urlparse(url)
+            print(f"\033[1;31m[!] Alternative search error: {str(e)}\033[0m")
         
-        return {
-            'dork': dork,
-            'url': url,
-            'domain': parsed_url.netloc,
-            'path': parsed_url.path,
-            'query': parsed_url.query,
-            'rank': index,
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-        }
+        return []
 
-    def print_result_info(self, result):
-        """Print information about a search result"""
-        print(f"\033[1;34m[{result['rank']}] {result['domain']} - {result['url'][:80]}...\033[0m")
+    def process_dork(self, dork, output_file="results.txt"):
+        """Process dork dengan multiple methods"""
+        print(f"\n\033[1;36m[═] Processing: {dork}\033[0m")
+        
+        all_results = []
+        
+        # Method 1: Manual Google search
+        print("\033[1;33m[→] Trying manual Google search...\033[0m")
+        results1 = self.manual_google_search(dork)
+        all_results.extend(results1)
+        
+        time.sleep(DELAY)
+        
+        # Method 2: Alternative search
+        if not results1:
+            print("\033[1;33m[→] Trying alternative method...\033[0m")
+            results2 = self.alternative_search_method(dork)
+            all_results.extend(results2)
+        
+        # Save results
+        if all_results:
+            self.save_results(all_results, dork, output_file)
+            print(f"\033[1;32m[✓] Found {len(all_results)} results\033[0m")
+        else:
+            print("\033[1;31m[✗] No results found\033[0m")
+            
+        return all_results
 
-    def save_results(self, results, filename):
-        """Save results to file in JSON format"""
+    def save_results(self, results, dork, filename):
+        """Save results"""
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         
-        mode = 'a' if os.path.exists(filename) else 'w'
-        with open(filename, mode, encoding='utf-8') as f:
+        with open(filename, 'a', encoding='utf-8') as f:
             for result in results:
-                f.write(json.dumps(result, ensure_ascii=False) + '\n')
+                data = {
+                    'dork': dork,
+                    'url': result,
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                }
+                f.write(json.dumps(data) + '\n')
 
-    def validate_dork(self, dork):
-        """Basic dork validation"""
-        if not dork or len(dork.strip()) < 3:
-            return False
-        return True
-
-# ===== MAIN FUNCTION =====
 def main():
-    parser = argparse.ArgumentParser(description='Google Dorking Tool')
+    parser = argparse.ArgumentParser(description='Google Dorking Tool - FIXED')
     parser.add_argument('-d', '--dork', help='Google dork query')
-    parser.add_argument('-f', '--file', help='File containing multiple dorks (one per line)')
-    parser.add_argument('-o', '--output', default=RESULTS_FILE, help='Output file path')
-    parser.add_argument('-m', '--max-results', type=int, default=MAX_RESULTS, help='Maximum results per dork')
-    parser.add_argument('--delay', type=float, default=DELAY, help='Delay between requests')
+    parser.add_argument('-f', '--file', help='File dengan multiple dorks')
+    parser.add_argument('-o', '--output', default='google_results.txt', help='Output file')
     
     args = parser.parse_args()
-    show_banner()
     
-    if not args.dork and not args.file:
-        print("\033[1;31m[!] Please provide either a dork (-d) or a file with dorks (-f)\033[0m")
-        return
+    print("\033[1;36m" + "="*60)
+    print("           GOOGLE DORKING TOOL - FIXED VERSION")
+    print("           Created by: bnzet")
+    print("="*60 + "\033[0m")
     
-    # Initialize Google dorker
     dorker = GoogleDorker()
     
-    # Collect dorks
-    dorks = []
     if args.dork:
-        if dorker.validate_dork(args.dork):
-            dorks.append(args.dork)
-        else:
-            print("\033[1;31m[!] Invalid dork query\033[0m")
-            return
-    
-    if args.file:
-        try:
-            with open(args.file, 'r', encoding='utf-8') as f:
-                dorks.extend([line.strip() for line in f if line.strip() and not line.startswith('#')])
-        except Exception as e:
-            print(f"\033[1;31m[!] Error reading file: {str(e)}\033[0m")
-            return
-    
-    print(f"\033[1;33m[+] Loaded {len(dorks)} dork queries\033[0m")
-    print(f"\033[1;33m[+] Maximum results per dork: {args.max_results}\033[0m")
-    
-    # Process dorks
-    for dork in dorks:
-        dorker.process_dork(dork, args.max_results, args.output)
-        if len(dorks) > 1:
-            time.sleep(args.delay * 2)  # Longer delay between different dorks
-
-# ===== INSTALLATION INSTRUCTIONS =====
-def show_installation():
-    print("""
-\033[1;32m=== Installation Instructions ===\033[0m
-
-1. Install required packages:
-   pip install requests beautifulsoup4
-
-2. Run the tool:
-   python3 google_dorker.py -d 'site:github.com password'
-
-3. For multiple dorks, create a file:
-   echo 'site:github.com password' > dorks.txt
-   echo 'filetype:pdf confidential' >> dorks.txt
-   python3 google_dorker.py -f dorks.txt
-""")
+        dorker.process_dork(args.dork, args.output)
+    elif args.file:
+        with open(args.file, 'r') as f:
+            dorks = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        
+        for dork in dorks:
+            dorker.process_dork(dork, args.output)
+            time.sleep(random.randint(2, 5))  # Random delay
 
 if __name__ == '__main__':
-    # Show installation instructions if no arguments
-    if len(os.sys.argv) == 1:
-        show_banner()
-        show_installation()
-    else:
-        main()
+    main()
