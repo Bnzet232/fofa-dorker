@@ -28,7 +28,7 @@ def show_banner():
 ╚═╝      ╚═════╝ ╚═╝     ╚═╝  ╚═╝    ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
 \033[0m
 \033[1;32mFOFA Dorking Tool | Created by: bnzet\033[0m
-\033[1;33mGithub: https://github.com/bnzet/fofa-dorker\033[0m
+\033[1;33mGithub: https://github.com/bnzet232/fofa-dorker\033[0m
 \033[1;31m[!] For authorized security research only\033[0m
 """)
 
