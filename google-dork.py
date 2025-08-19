@@ -3,26 +3,28 @@
 # Created by: bnzet
 
 import requests
-from googlesearch import search
+from bs4 import BeautifulSoup
 import argparse
 import time
 import random
 import json
 import os
+import re
+from urllib.parse import urlparse, quote_plus
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
 
 # ===== CONFIG =====
-MAX_RESULTS = 100
-DELAY = 2  # Delay between requests to avoid blocking
+MAX_RESULTS = 50  # Reduced to avoid blocking
+DELAY = 3  # Increased delay to avoid blocking
 TIMEOUT = 15
 USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1'
 ]
 RESULTS_FILE = "google_dork_results.txt"
+GOOGLE_SEARCH_URL = "https://www.google.com/search"
 
 # ===== ASCII ART =====
 def show_banner():
@@ -51,56 +53,108 @@ class GoogleDorker:
     def get_random_user_agent(self):
         return random.choice(USER_AGENTS)
 
-    def google_search(self, dork, num_results=MAX_RESULTS, lang="en", country="us"):
-        """Perform Google search using the dork"""
+    def google_search(self, dork, num_results=MAX_RESULTS, start=0):
+        """Perform Google search manually by scraping results"""
         try:
             print(f"\033[1;33m[+] Searching for: {dork}\033[0m")
             
-            # Perform the search
-            search_results = list(search(
-                dork,
-                num_results=num_results,
-                lang=lang,
-                country=country,
-                user_agent=self.get_random_user_agent(),
-                timeout=TIMEOUT
-            ))
+            params = {
+                'q': dork,
+                'num': min(100, num_results),
+                'start': start,
+                'hl': 'en',
+                'filter': '0'
+            }
             
-            return search_results
+            headers = {
+                'User-Agent': self.get_random_user_agent(),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = self.session.get(
+                GOOGLE_SEARCH_URL,
+                params=params,
+                headers=headers,
+                timeout=TIMEOUT
+            )
+            
+            if response.status_code != 200:
+                print(f"\033[1;31m[!] Google returned status code: {response.status_code}\033[0m")
+                return []
+            
+            return self.parse_google_results(response.text)
             
         except Exception as e:
             print(f"\033[1;31m[!] Search error: {str(e)}\033[0m")
             return []
+
+    def parse_google_results(self, html_content):
+        """Parse Google search results from HTML"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        results = []
+        
+        # Find search result links
+        for g in soup.find_all('div', class_='g'):
+            link = g.find('a')
+            if link and link.get('href'):
+                url = link.get('href')
+                if url.startswith('/url?q='):
+                    url = url.split('/url?q=')[1].split('&')[0]
+                    url = requests.utils.unquote(url)
+                
+                # Filter out Google URLs and validate
+                if (url.startswith('http') and 
+                    not urlparse(url).netloc.endswith('google.com')):
+                    results.append(url)
+        
+        return results
 
     def process_dork(self, dork, max_results=MAX_RESULTS, output_file=RESULTS_FILE):
         """Process a single dork query"""
         print(f"\n\033[1;36m[+] Processing dork: {dork}\033[0m")
         
         try:
-            results = self.google_search(dork, num_results=max_results)
+            all_results = []
+            results_per_page = 10
+            pages_needed = (max_results + results_per_page - 1) // results_per_page
             
-            if not results:
-                print("\033[1;33m[!] No results found\033[0m")
-                return
-            
-            formatted_results = []
-            for i, url in enumerate(results, 1):
-                formatted_result = self.format_result(url, dork, i)
-                formatted_results.append(formatted_result)
+            for page in range(pages_needed):
+                start = page * results_per_page
+                results = self.google_search(dork, results_per_page, start)
                 
-                # Print result info
-                self.print_result_info(formatted_result)
+                if not results:
+                    print("\033[1;33m[!] No results found or blocked by Google\033[0m")
+                    break
                 
-                # Add delay between processing results
-                if i < len(results):
-                    time.sleep(random.uniform(0.5, 1.5))
+                for result in results:
+                    if len(all_results) >= max_results:
+                        break
+                    all_results.append(result)
+                
+                print(f"\033[1;32m[+] Found {len(results)} results on page {page + 1}\033[0m")
+                
+                # Add delay to avoid blocking
+                time.sleep(random.uniform(DELAY, DELAY + 2))
+                
+                if len(all_results) >= max_results:
+                    break
             
-            # Save results
-            if formatted_results:
+            if all_results:
+                formatted_results = []
+                for i, url in enumerate(all_results, 1):
+                    formatted_result = self.format_result(url, dork, i)
+                    formatted_results.append(formatted_result)
+                    self.print_result_info(formatted_result)
+                
                 self.save_results(formatted_results, output_file)
                 print(f"\033[1;32m[+] Saved {len(formatted_results)} results to {output_file}\033[0m")
             else:
-                print("\033[1;33m[!] No valid results to save\033[0m")
+                print("\033[1;33m[!] No results found for this dork\033[0m")
                 
         except Exception as e:
             print(f"\033[1;31m[!] Error processing dork: {str(e)}\033[0m")
@@ -145,9 +199,6 @@ def main():
     parser.add_argument('-f', '--file', help='File containing multiple dorks (one per line)')
     parser.add_argument('-o', '--output', default=RESULTS_FILE, help='Output file path')
     parser.add_argument('-m', '--max-results', type=int, default=MAX_RESULTS, help='Maximum results per dork')
-    parser.add_argument('-t', '--threads', type=int, default=1, help='Number of threads (use cautiously)')
-    parser.add_argument('--lang', default='en', help='Search language (e.g., en, id, es)')
-    parser.add_argument('--country', default='us', help='Search country (e.g., us, id, uk)')
     parser.add_argument('--delay', type=float, default=DELAY, help='Delay between requests')
     
     args = parser.parse_args()
@@ -181,54 +232,32 @@ def main():
     print(f"\033[1;33m[+] Maximum results per dork: {args.max_results}\033[0m")
     
     # Process dorks
-    if len(dorks) == 1:
-        dorker.process_dork(dorks[0], args.max_results, args.output)
-    else:
-        print(f"\033[1;33m[+] Processing {len(dorks)} dorks with {args.threads} threads\033[0m")
-        
-        with ThreadPoolExecutor(max_workers=args.threads) as executor:
-            for dork in dorks:
-                executor.submit(dorker.process_dork, dork, args.max_results, args.output)
-                time.sleep(args.delay)  # Stagger requests
+    for dork in dorks:
+        dorker.process_dork(dork, args.max_results, args.output)
+        if len(dorks) > 1:
+            time.sleep(args.delay * 2)  # Longer delay between different dorks
 
-# ===== EXAMPLE DORK FILE CONTENT =====
-def create_example_dork_file():
-    example_content = """# Google Dorks Examples
-# File: dorks.txt
-# Usage: python3 google_dorker.py -f dorks.txt
+# ===== INSTALLATION INSTRUCTIONS =====
+def show_installation():
+    print("""
+\033[1;32m=== Installation Instructions ===\033[0m
 
-# Basic dorks
-site:github.com password
-filetype:pdf confidential
-intitle:"index of" "parent directory"
+1. Install required packages:
+   pip install requests beautifulsoup4
 
-# Login pages
-inurl:login.php
-inurl:admin intitle:login
-inurl:wp-admin
+2. Run the tool:
+   python3 google_dorker.py -d 'site:github.com password'
 
-# Sensitive files
-filetype:sql "INSERT INTO" password
-filetype:env DB_PASSWORD
-filetype:log "error" "password"
-
-# Vulnerable systems
-inurl:phpmyadmin intitle:phpmyadmin
-inurl:shell.php?cmd=
-inurl:config.php.bak
-
-# Specific technologies
-inurl:wordpress wp-content
-inurl:joomla component
-inurl:drupal intext:"Powered by"
-"""
-    
-    with open('example_dorks.txt', 'w', encoding='utf-8') as f:
-        f.write(example_content)
-    print("\033[1;32m[+] Created example_dorks.txt with sample dorks\033[0m")
+3. For multiple dorks, create a file:
+   echo 'site:github.com password' > dorks.txt
+   echo 'filetype:pdf confidential' >> dorks.txt
+   python3 google_dorker.py -f dorks.txt
+""")
 
 if __name__ == '__main__':
-    # Uncomment the next line to create an example dork file
-    # create_example_dork_file()
-    
-    main()
+    # Show installation instructions if no arguments
+    if len(os.sys.argv) == 1:
+        show_banner()
+        show_installation()
+    else:
+        main()
